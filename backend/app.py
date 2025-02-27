@@ -162,4 +162,4 @@ def haversine(lat1, lon1, lat2, lon2):
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)
