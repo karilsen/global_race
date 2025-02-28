@@ -131,13 +131,13 @@
         totalScore += score;
         saveProgress();
         taskReady = true; // ✅ Show "Start Next Task" button
-        taskInProgress = false; // ✅ Reset task state
+        taskInProgress = false; // ✅ Allow starting a new task
     } else {
         incorrectGuesses++;
         placeMarker(playerLat, playerLon, "red", "❌ Wrong guess!");
         score = Math.max(0, score - 100);
 
-        if (incorrectGuesses >= 5) {
+        if (incorrectGuesses >= 5 || score <= 0) {
             stopTimer();
             checkMessage = "Task forfeited. Revealing correct location...";
             showCorrectLocation();
@@ -145,28 +145,35 @@
     }
 }
 
+
   
-    function showCorrectLocation() {
-      if (!task) return;
-      map.setView([task.latitude, task.longitude], 10);
-      placeMarker(task.latitude, task.longitude, "red", `❌ Task Failed! Correct location: ${task.location_name}`, true);
-      taskReady = true; // ✅ Show "Start Next Task" button
-    }
+function showCorrectLocation() {
+    if (!task) return;
+    map.setView([task.latitude, task.longitude], 10);
+    placeMarker(task.latitude, task.longitude, "red", `❌ Task Failed! Correct location: ${task.location_name}`, true);
+
+    taskReady = true; // ✅ Show "Start Next Task" button
+    taskInProgress = false; // ✅ Allow task restart
+}
+
   
-    function startNextTask() {
+    async function startNextTask() {
     if (taskInProgress) return; // ✅ Prevent multiple starts
-    taskInProgress = true; // ✅ Mark the task as in progress
-    taskReady = false; // ✅ Hide the "Start Task" button
+    taskInProgress = true; // ✅ Mark task as in progress
+    taskReady = false; // ✅ Hide the button
     countdown = 5; // ✅ Set countdown to 5 seconds
 
-    let countdownInterval = setInterval(() => {
+    // ✅ Ensure countdown updates in UI
+    let countdownInterval = setInterval(async () => {
         countdown--;
+        await tick(); // ✅ Forces Svelte to update UI every second
         if (countdown === 0) {
             clearInterval(countdownInterval);
-            fetchTask(); // ✅ Fetch the new task after countdown
+            await fetchTask(); // ✅ Fetch the new task after countdown
         }
     }, 1000);
 }
+
 
 
 
