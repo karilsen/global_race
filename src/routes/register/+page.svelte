@@ -1,40 +1,59 @@
 <script>
-    let username = "";
-    let password = "";
-  
-    async function register() {
+  import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
+
+  let nickname = "";
+
+  async function register() {
+      if (!nickname.trim()) {
+          alert("Please enter a nickname.");
+          return;
+      }
+
       const response = await fetch("http://localhost:5000/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password })
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ nickname }),
       });
-  
-      const data = await response.json();
-      alert(data.message);
-    }
-  </script>
-  
-  <div class="flex items-center justify-center min-h-screen bg-gray-100">
-    <div class="w-full max-w-md bg-white p-6 rounded-lg shadow-md">
-      <h1 class="text-2xl font-bold text-center text-gray-700 mb-6">Register</h1>
-      
-      <div class="mb-4">
-        <label for="username" class="block text-gray-600 text-sm mb-1">Username</label>
-        <input id="username" type="text" bind:value={username} class="w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-blue-400" placeholder="Choose a username">
-      </div>
-  
-      <div class="mb-4">
-        <label for="password" class="block text-gray-600 text-sm mb-1">Password</label>
-        <input id="password" type="password" bind:value={password} class="w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-blue-400" placeholder="Choose a password">
-      </div>
-  
-      <button on:click={register} class="w-full bg-green-500 text-white py-2 rounded-md hover:bg-green-600">
-        Register
+
+      const result = await response.json();
+
+      if (response.ok) {
+          if (typeof window !== "undefined") {
+              sessionStorage.setItem("nickname", nickname);
+              localStorage.setItem("nickname", nickname); // ✅ Store persistently
+          }
+          goto("/map");
+      } else {
+          alert(result.message);
+      }
+  }
+
+  onMount(() => {
+      if (typeof window !== "undefined") {
+          const savedNickname = localStorage.getItem("nickname");
+          if (savedNickname) {
+              sessionStorage.setItem("nickname", savedNickname);
+              goto("/map");
+          }
+      }
+  });
+</script>
+
+<div class="flex flex-col items-center justify-center min-h-screen">
+  <div class="bg-white shadow-lg rounded-lg p-8 w-96">
+      <h1 class="text-2xl font-bold text-center mb-4">Register</h1>
+      <input 
+          type="text" 
+          bind:value={nickname} 
+          placeholder="Enter your nickname"
+          class="w-full px-4 py-2 border border-gray-300 rounded-md mb-4"
+      />
+      <button 
+          on:click={register} 
+          class="w-full bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 transition"
+      >
+          Start Game
       </button>
-  
-      <p class="text-center text-sm text-gray-500 mt-4">
-        Already have an account? <a href="/login" class="text-blue-500 hover:underline">Login here</a>
-      </p>
-    </div>
   </div>
-  
+</div>

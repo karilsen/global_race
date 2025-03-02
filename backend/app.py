@@ -39,18 +39,49 @@ locations = [
     {"name": "The Vatican City", "latitude": 41.9029, "longitude": 12.4534},
     {"name": "Stonehenge", "latitude": 51.1789, "longitude": -1.8262},
     {"name": "The Blue Lagoon", "latitude": 63.8804, "longitude": -22.4503},
-    {"name": "Hollywood Sign", "latitude": 34.1341, "longitude": -118.3217}
+    {"name": "Hollywood Sign", "latitude": 34.1341, "longitude": -118.3217},
+    {"name": "Great Barrier Reef", "latitude": -18.2871, "longitude": 147.7017},
+    {"name": "Mount Kilimanjaro", "latitude": -3.0674, "longitude": 37.3541},
+    {"name": "Sagrada Familia", "latitude": 41.4036, "longitude": 2.1744},
+    {"name": "The Kremlin", "latitude": 55.7520, "longitude": 37.6175},
+    {"name": "Forbidden City", "latitude": 39.9166, "longitude": 116.3904},
+    {"name": "Acropolis of Athens", "latitude": 37.9715, "longitude": 23.7262},
+    {"name": "Easter Island", "latitude": -27.1121, "longitude": -109.3490},
+    {"name": "Grand Canyon", "latitude": 36.1069, "longitude": -112.1129},
+    {"name": "Dead Sea", "latitude": 31.5583, "longitude": 35.4967},
+    {"name": "The Alhambra", "latitude": 37.1764, "longitude": -3.5881},
+    {"name": "Edinburgh Castle", "latitude": 55.9487, "longitude": -3.1999},
+    {"name": "Neuschwanstein Castle", "latitude": 47.5576, "longitude": 10.7498},
+    {"name": "Mesa Verde National Park", "latitude": 37.1811, "longitude": -108.4878},
+    {"name": "Uluru (Ayers Rock)", "latitude": -25.3446, "longitude": 131.0369},
+    {"name": "The Matterhorn", "latitude": 45.9765, "longitude": 7.6585},
+    {"name": "Hagia Sophia", "latitude": 41.0086, "longitude": 28.9802},
+    {"name": "The Hermitage Museum", "latitude": 59.9399, "longitude": 30.3118},
+    {"name": "Giant's Causeway", "latitude": 55.2404, "longitude": -6.5209},
+    {"name": "The Great Sphinx of Giza", "latitude": 29.9754, "longitude": 31.1376},
+    {"name": "The Moai Statues", "latitude": -27.1218, "longitude": -109.3663},
+    {"name": "The Blue Mosque", "latitude": 41.0055, "longitude": 28.9769},
+    {"name": "The Trevi Fountain", "latitude": 41.9009, "longitude": 12.4833},
+    {"name": "The Spanish Steps", "latitude": 41.9054, "longitude": 12.4828},
+    {"name": "The Brandenburg Gate", "latitude": 52.5162, "longitude": 13.3777},
+    {"name": "The Atomium", "latitude": 50.8949, "longitude": 4.3413},
+    {"name": "The Petronas Towers", "latitude": 3.1579, "longitude": 101.7118},
+    {"name": "The CN Tower", "latitude": 43.6426, "longitude": -79.3871},
+    {"name": "The Space Needle", "latitude": 47.6205, "longitude": -122.3493},
+    {"name": "The Rock of Gibraltar", "latitude": 36.1433, "longitude": -5.3535}
 ]
 
 
 
 
 # User Model
+# User Model (Now only stores nickname, score, and correct locations)
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(50), unique=True, nullable=False)
-    password_hash = db.Column(db.String(255), nullable=False)
-    traveler_id = db.Column(db.String(50), unique=True, default=lambda: str(uuid.uuid4()))
+    nickname = db.Column(db.String(50), unique=True, nullable=False)
+    total_score = db.Column(db.Integer, default=0)
+    correct_locations = db.Column(db.Integer, default=0)
+
 
 # Task Model
 class Task(db.Model):
@@ -75,17 +106,24 @@ with app.app_context():
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
-    username = data.get('username')
-    password = data.get('password')
-    if User.query.filter_by(username=username).first():
-        return jsonify({"message": "Username already exists"}), 400
-    
-    hashed_pw = bcrypt.generate_password_hash(password).decode('utf-8')
-    new_user = User(username=username, password_hash=hashed_pw)
+    nickname = data.get('nickname')
+
+    if not nickname:
+        return jsonify({"message": "Nickname is required"}), 400
+
+    existing_user = User.query.filter_by(nickname=nickname).first()
+    if existing_user:
+        return jsonify({"message": "Nickname already taken"}), 400
+
+    new_user = User(nickname=nickname)
     db.session.add(new_user)
     db.session.commit()
-    
-    return jsonify({"message": "User registered successfully", "traveler_id": new_user.traveler_id})
+
+    return jsonify({
+        "message": "Registration successful",
+        "nickname": new_user.nickname
+    })
+
 
 # User Login
 @app.route('/login', methods=['POST'])
@@ -126,6 +164,35 @@ def nearest_point():
 @app.route("/locations", methods=["GET"])
 def get_locations():
     return jsonify(locations)
+
+
+@app.route('/update-score', methods=['POST'])
+def update_score():
+    data = request.json
+    nickname = data.get('nickname')
+    points = data.get('points')
+    correct_location = data.get('correct')
+
+    user = User.query.filter_by(nickname=nickname).first()
+    if not user:
+        return jsonify({"message": "User not found"}), 404
+
+    user.total_score += points
+    if correct_location:
+        user.correct_locations += 1
+
+    db.session.commit()
+    return jsonify({"message": "Score updated successfully", "total_score": user.total_score, "correct_locations": user.correct_locations})
+
+@app.route('/leaderboard', methods=['GET'])
+def leaderboard():
+    users = User.query.order_by(User.total_score.desc()).limit(10).all()
+    leaderboard_data = [
+        {"nickname": user.nickname, "total_score": user.total_score, "correct_locations": user.correct_locations}
+        for user in users
+    ]
+    return jsonify(leaderboard_data)
+
 
 
 @app.route("/check-task", methods=["POST"])
