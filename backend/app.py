@@ -170,19 +170,32 @@ def get_locations():
 def update_score():
     data = request.json
     nickname = data.get('nickname')
-    points = data.get('points')
+    points = data.get('points', 0)
+    bonus_points = data.get('bonus_points', 0)
     correct_location = data.get('correct')
+
+    try:
+        points = int(points)
+        bonus_points = int(bonus_points)
+    except (TypeError, ValueError):
+        return jsonify({"message": "Points and bonus_points must be numbers"}), 400
 
     user = User.query.filter_by(nickname=nickname).first()
     if not user:
         return jsonify({"message": "User not found"}), 404
 
-    user.total_score += points
+    user.total_score += points + bonus_points
     if correct_location:
         user.correct_locations += 1
 
     db.session.commit()
-    return jsonify({"message": "Score updated successfully", "total_score": user.total_score, "correct_locations": user.correct_locations})
+    return jsonify({
+        "message": "Score updated successfully",
+        "total_score": user.total_score,
+        "correct_locations": user.correct_locations,
+        "applied_points": points,
+        "applied_bonus_points": bonus_points
+    })
 
 @app.route('/leaderboard', methods=['GET'])
 def leaderboard():
@@ -209,10 +222,26 @@ def check_task():
 
         distance = haversine(player_lat, player_lon, task.latitude, task.longitude)
 
-        if distance < 1:  # ✅ Players must be within 1 km
-            return jsonify({"success": True, "message": f"Task completed! You were {distance:.2f} km away."})
-        else:
-            return jsonify({"success": False, "message": f"Not close enough. You are {distance:.2f} km away. Keep searching!"})
+        success = distance < 100  # Players must be within 100 km
+        bonus_points = 50 if distance <= 10 else 0
+
+        if success:
+            response = {
+                "success": True,
+                "message": f"Task completed! You were {distance:.2f} km away.",
+                "distance_km": round(distance, 2),
+                "bonus_points": bonus_points
+            }
+            if bonus_points:
+                response["message"] += f" Bonus awarded: {bonus_points} points for being within 10 km."
+            return jsonify(response)
+
+        return jsonify({
+            "success": False,
+            "message": f"Not close enough. You are {distance:.2f} km away. Keep searching!",
+            "distance_km": round(distance, 2),
+            "bonus_points": 0
+        })
 
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

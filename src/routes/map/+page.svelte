@@ -1,235 +1,65 @@
 <script>
-    import { onMount, tick } from "svelte";
+    import { onMount } from "svelte";
     import { browser } from "$app/environment";
+    import { goto } from "$app/navigation";
     import "leaflet/dist/leaflet.css";
 
-    let map;
-    let task = null;
-    let playerLat = null;
-    let playerLon = null;
-    let checkMessage = "";
-    let selectedMarker = null;
-    let countdown = 0;
-    let taskTimer = null;
-    let L;
+    const MAX_GUESSES = 5;
+    const AUTO_NEXT_DELAY = 2000; // ms before automatically loading the next task
 
-    // Custom icons – we declare them here and initialize them in onMount after L is available.
+    let map;
+    let L;
+    let permanentLayer;
     let greenIcon;
     let redIcon;
 
-    // Only use sessionStorage in the browser.
+    let task = null;
+    let playerLat = null;
+    let playerLon = null;
+    let selectedMarker = null;
+    let tempMarkers = [];
+    let correctMarkers = [];
+
+    let taskTimer = null;
+    let nextTaskTimeout = null;
+
+    let gameStarted = false;
+    let taskInProgress = false;
+    let loadingTask = false;
+
     let totalScore = 0;
     let correctLocations = 0;
-    let wrongLocations=0;
-  
-    if (browser) {
-        totalScore = parseInt(sessionStorage.getItem("totalScore")) || 0;
-        correctLocations = parseInt(sessionStorage.getItem("correctLocations")) || 0;
-        wrongLocations = parseInt(sessionStorage.getItem("wrongLocations")) || 0;
-    }
-
+    let wrongLocations = 0;
     let score = 1000;
     let timeElapsed = 0;
     let incorrectGuesses = 0;
-    let correctMarkers = [];
-    let tempMarkers = [];
-    let taskReady = false;      // Controls when a task is ready to start
-    let taskInProgress = false; // Whether a task is ongoing
-
-    // Define nickname (using sessionStorage/localStorage if available)
-    let nickname = "Guest";
-    if (browser) {
-        nickname = sessionStorage.getItem("nickname") || localStorage.getItem("nickname") || "Guest";
-    }
-
-    // Leaderboard
+    let checkMessage = "";
+    let checkStatus = null;      // "success" | "fail" | null
+    let lastBonusPoints = 0;
+    let lastDistanceKm = null;
     let leaderboard = [];
-    async function fetchLeaderboard() {
-        try {
-            const response = await fetch("http://localhost:5000/leaderboard");
-            leaderboard = await response.json();
-        } catch (error) {
-            console.error("Error fetching leaderboard:", error);
-        }
-    }
+    let nickname = "Guest";
 
-    async function fetchTask() {
-        try {
-            const response = await fetch("http://localhost:5000/get_task");
-            task = await response.json();
-            resetTaskState();
+    onMount(async () => {
+        if (!browser) return;
 
-            taskReady = false; // Hide start button once task is loaded
-            taskInProgress = true;
-            await tick(); // Ensure UI updates before timer starts
-            startTimer();
-        } catch (error) {
-            console.error("Error fetching task:", error);
-        }
-    }
-
-    function resetTaskState() {
-        timeElapsed = 0;
-        incorrectGuesses = 0;
-        checkMessage = "";
-        score = 1000;
-
-        // Remove temporary markers
-        tempMarkers.forEach(marker => map.removeLayer(marker));
-        tempMarkers = [];
-
-        if (selectedMarker) {
-            map.removeLayer(selectedMarker);
-        }
-    }
-
-    function startTimer() {
-    if (taskTimer) {
-        clearInterval(taskTimer);
-    }
-    taskTimer = setInterval(() => {
-        timeElapsed++;
-        score = Math.max(0, score - 5);
-        if (score === 0) {
-            stopTimer();
-            checkMessage = "Time is up! Revealing correct location...";
-            showCorrectLocation();
-        }
-    }, 1000);
-}
-
-
-    function stopTimer() {
-        if (taskTimer) {
-            clearInterval(taskTimer);
-        }
-    }
-
-    // Updated placeMarker function uses custom icons based on the "color" parameter.
-    function placeMarker(lat, lon, color, message, permanent = false) {
-        // Choose icon based on color parameter.
-        let icon;
-        if (color === "green") {
-            icon = greenIcon;
-        } else if (color === "red") {
-            icon = redIcon;
-        } else {
-            icon = L.Icon.Default();
-        }
-
-        let marker = L.marker([lat, lon], { icon })
-            .addTo(map)
-            .bindPopup(message)
-            .openPopup();
-
-        if (permanent) {
-            correctMarkers.push(marker);
-        } else {
-            tempMarkers.push(marker);
-        }
-    }
-
-    function onMapClick(event) {
-        if (selectedMarker) {
-            map.removeLayer(selectedMarker);
-        }
-        playerLat = event.latlng.lat;
-        playerLon = event.latlng.lng;
-        selectedMarker = L.marker([playerLat, playerLon])
-            .addTo(map)
-            .bindPopup("You selected this location")
-            .openPopup();
-    }
-
-    async function checkTaskCompletion() {
-        if (!task || playerLat === null || playerLon === null) {
-            checkMessage = "Click on the map to select a location first!";
+        const savedNickname = sessionStorage.getItem("nickname") || localStorage.getItem("nickname");
+        if (!savedNickname) {
+            goto("/");
             return;
         }
 
-        try {
-            const response = await fetch("http://localhost:5000/check-task", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    latitude: playerLat,
-                    longitude: playerLon,
-                    task_name: task.location_name,
-                }),
-            });
+        nickname = savedNickname;
+        totalScore = parseInt(sessionStorage.getItem("totalScore")) || 0;
+        correctLocations = parseInt(sessionStorage.getItem("correctLocations")) || 0;
+        wrongLocations = parseInt(sessionStorage.getItem("wrongLocations")) || 0;
 
-            const result = await response.json();
-            checkMessage = result.message;
-
-            if (result.success) {
-                stopTimer();
-                placeMarker(playerLat, playerLon, "green", "✔ Correct!", true);
-                correctLocations++;
-                totalScore += score;
-                await fetch("http://localhost:5000/update-score", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            nickname,
-            points: score,
-            correct: true
-        })
+        await setupMap();
+        fetchLeaderboard();
     });
-                saveProgress();
-                taskReady = true; // Show "Start Next Task" button
-                taskInProgress = false;
-                fetchLeaderboard(); // Update leaderboard after score change
-            } else {
-                incorrectGuesses++;
-                placeMarker(playerLat, playerLon, "red", "❌ Wrong guess!");
-                score = Math.max(0, score - 100);
 
-                if (incorrectGuesses >= 5 || score <= 0) {
-                   
-                    stopTimer();
-                    checkMessage = "Task forfeited. Revealing correct location...";
-                    showCorrectLocation();
-                   
-                }
-            }
-        } catch (error) {
-            console.error("Error checking task completion:", error);
-        }
-    }
-
-    function showCorrectLocation() {
-        if (!task) return;
-        map.setView([task.latitude, task.longitude], 10);
-        placeMarker(task.latitude, task.longitude, "red", `❌ Task Failed! Correct location: ${task.location_name}`, true);
-        wrongLocations++;
-        taskReady = true;
-        taskInProgress = false;
-    }
-
-    async function startNextTask() {
-        if (taskInProgress) return; // Prevent multiple task starts
-        taskInProgress = true;
-        taskReady = false;
-        countdown = 5; // 5-second countdown
-
-        let countdownInterval = setInterval(async () => {
-            countdown--;
-            await tick(); // Update UI every second
-            if (countdown === 0) {
-                clearInterval(countdownInterval);
-                await fetchTask(); // Fetch new task after countdown
-            }
-        }, 1000);
-    }
-
-    function saveProgress() {
-        if (browser) {
-            sessionStorage.setItem("totalScore", totalScore);
-            sessionStorage.setItem("correctLocations", correctLocations);
-        }
-    }
-
-    onMount(async () => {
+    async function setupMap() {
+        if (map) return;
         L = await import("leaflet");
 
         // Initialize custom icons after Leaflet is available.
@@ -255,38 +85,270 @@
             attribution: "&copy; Google Maps",
         }).addTo(map);
 
+        // Create the permanent layer group for markers and add it to the map.
+        permanentLayer = L.layerGroup().addTo(map);
+
         map.on("click", onMapClick);
-        taskReady = true; // Show "Start Task" button when the game loads
+    }
+
+    function stopTimer() {
+        if (taskTimer) {
+            clearInterval(taskTimer);
+        }
+    }
+
+    function startTimer() {
+        stopTimer();
+        taskTimer = setInterval(() => {
+            timeElapsed++;
+            score = Math.max(0, score - 5);
+            if (score === 0) {
+                handleTimeout();
+            }
+        }, 1000);
+    }
+
+    function resetTaskState() {
+        timeElapsed = 0;
+        incorrectGuesses = 0;
+        checkMessage = "";
+        checkStatus = null;
+        lastBonusPoints = 0;
+        lastDistanceKm = null;
+        score = 1000;
+        playerLat = null;
+        playerLon = null;
+
+        tempMarkers.forEach(marker => map.removeLayer(marker));
+        tempMarkers = [];
+
+        if (selectedMarker) {
+            map.removeLayer(selectedMarker);
+            selectedMarker = null;
+        }
+    }
+
+    function onMapClick(event) {
+        if (!taskInProgress) return;
+        if (selectedMarker) {
+            map.removeLayer(selectedMarker);
+        }
+        playerLat = event.latlng.lat;
+        playerLon = event.latlng.lng;
+        selectedMarker = L.marker([playerLat, playerLon])
+            .addTo(map)
+            .bindPopup("You selected this location")
+            .openPopup();
+    }
+
+    function placeMarker(lat, lon, color, message, permanent = false) {
+        let icon;
+        if (color === "green") {
+            icon = greenIcon;
+        } else if (color === "red") {
+            icon = redIcon;
+        } else {
+            icon = L.Icon.Default();
+        }
+
+        const marker = L.marker([lat, lon], { icon })
+            .bindPopup(message)
+            .openPopup();
+
+        if (permanent) {
+            marker.addTo(permanentLayer);
+            correctMarkers.push(marker);
+        } else {
+            marker.addTo(map);
+            tempMarkers.push(marker);
+        }
+    }
+
+    async function fetchLeaderboard() {
+        try {
+            const response = await fetch("http://localhost:5000/leaderboard");
+            leaderboard = await response.json();
+        } catch (error) {
+            console.error("Error fetching leaderboard:", error);
+        }
+    }
+
+    async function fetchTask() {
+        const response = await fetch("http://localhost:5000/get_task");
+        task = await response.json();
+    }
+
+    async function startGame() {
+        if (gameStarted || loadingTask) return;
+        gameStarted = true;
+        await startNextTask();
+    }
+
+    function queueNextTask() {
+        if (!gameStarted) return;
+        if (nextTaskTimeout) {
+            clearTimeout(nextTaskTimeout);
+        }
+        nextTaskTimeout = setTimeout(() => {
+            startNextTask();
+        }, AUTO_NEXT_DELAY);
+    }
+
+    async function startNextTask() {
+        if (loadingTask) return;
+        loadingTask = true;
+        stopTimer();
+        resetTaskState();
+        try {
+            await fetchTask();
+            taskInProgress = true;
+            startTimer();
+        } catch (error) {
+            checkStatus = "fail";
+            checkMessage = "Could not load a task. Please try again.";
+            taskInProgress = false;
+        } finally {
+            loadingTask = false;
+        }
+    }
+
+    async function applyScore(points, bonusPoints) {
+        const payload = {
+            nickname,
+            points: Math.max(points, 0),
+            bonus_points: Math.max(bonusPoints, 0),
+            correct: true
+        };
+        try {
+            const response = await fetch("http://localhost:5000/update-score", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            const result = await response.json();
+            if (response.ok) {
+                totalScore = result.total_score;
+                correctLocations = result.correct_locations;
+            } else {
+                totalScore += payload.points + payload.bonus_points;
+                correctLocations += 1;
+            }
+        } catch (error) {
+            console.error("Error updating score:", error);
+            totalScore += payload.points + payload.bonus_points;
+            correctLocations += 1;
+        }
+        saveProgress();
         fetchLeaderboard();
-    });
+    }
+
+    async function checkTaskCompletion() {
+        if (!taskInProgress || !task) {
+            checkMessage = "Start the task first.";
+            checkStatus = "fail";
+            return;
+        }
+        if (playerLat === null || playerLon === null) {
+            checkMessage = "Click on the map to select a location first!";
+            checkStatus = "fail";
+            return;
+        }
+
+        try {
+            const response = await fetch("http://localhost:5000/check-task", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    latitude: playerLat,
+                    longitude: playerLon,
+                    task_name: task.location_name,
+                }),
+            });
+
+            const result = await response.json();
+            checkStatus = result.success ? "success" : "fail";
+            lastBonusPoints = Number(result.bonus_points) || 0;
+            lastDistanceKm = typeof result.distance_km === "number" ? result.distance_km : null;
+            const distanceText = lastDistanceKm !== null ? `${lastDistanceKm.toFixed(2)} km` : "unknown distance";
+            checkMessage = result.message || (result.success ? `Task completed! Distance: ${distanceText}` : `Not close enough. Distance: ${distanceText}`);
+
+            if (result.success) {
+                stopTimer();
+                await applyScore(score, lastBonusPoints);
+                placeMarker(task.latitude, task.longitude, "green", `Correct! Distance: ${distanceText}`, true);
+                taskInProgress = false;
+                queueNextTask();
+            } else {
+                incorrectGuesses++;
+                placeMarker(playerLat, playerLon, "red", "Wrong guess!");
+                score = Math.max(0, score - 100);
+
+                if (incorrectGuesses >= MAX_GUESSES) {
+                    failRound(`Max guesses reached. Correct location: ${task.location_name}`);
+                }
+            }
+        } catch (error) {
+            console.error("Error checking task completion:", error);
+            checkStatus = "fail";
+            checkMessage = "Could not check task right now. Please try again.";
+        }
+    }
+
+    function handleTimeout() {
+        stopTimer();
+        failRound("Time is up. Correct location shown.");
+    }
+
+    function failRound(message) {
+        if (!task) return;
+        stopTimer();
+        checkStatus = "fail";
+        checkMessage = message || `Task failed. Correct location: ${task.location_name}`;
+        placeMarker(task.latitude, task.longitude, "red", `Correct location: ${task.location_name}`, true);
+        wrongLocations++;
+        saveProgress();
+        taskInProgress = false;
+        queueNextTask();
+    }
+
+    function saveProgress() {
+        if (browser) {
+            sessionStorage.setItem("totalScore", totalScore);
+            sessionStorage.setItem("correctLocations", correctLocations);
+            sessionStorage.setItem("wrongLocations", wrongLocations);
+        }
+    }
+
+    function endSession() {
+        stopTimer();
+        if (nextTaskTimeout) {
+            clearTimeout(nextTaskTimeout);
+        }
+        taskInProgress = false;
+        gameStarted = false;
+        if (browser) {
+            sessionStorage.clear();
+            localStorage.removeItem("nickname");
+        }
+        goto("/");
+    }
 </script>
 
 <style>
-    .sidebar {
-        position: fixed;
-        left: 10px;
-        top: 50px;
-        width: 250px;
-        background: white;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-    }
     .progress-bar-container {
         width: 100%;
-        background: #e5e7eb; /* Tailwind gray-300 */
+        background: #e5e7eb;
         height: 0.75rem;
         border-radius: 0.375rem;
         margin-top: 0.5rem;
     }
     .progress-bar {
         height: 100%;
-        background: #10b981; /* Tailwind green-500 */
+        background: #10b981;
         border-radius: 0.375rem;
     }
 </style>
 
-<!-- UI Layout -->
 <div class="flex h-screen gap-6 p-4">
     <!-- Sidebar -->
     <div class="w-80 bg-white shadow-lg p-6 rounded-lg">
@@ -314,60 +376,75 @@
             <p class="text-lg">Wrong Locations</p>
         </div>
 
-
-        {#if task && !taskReady}
-        <div class="mt-4 p-4 bg-white border border-gray-300 rounded-lg shadow-md">
-          <div class="flex items-center space-x-2">
-            <!-- Icon (example: a location pin icon) -->
-            <svg class="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 11c1.657 0 3-1.343 3-3S13.657 5 12 5 9 6.343 9 8s1.343 3 3 3z"></path>
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"></path>
-            </svg>
-            <h3 class="text-xl font-bold text-gray-800">Lets find </h3>
-          </div>
-          <p class="text-lg mt-2">
-        <span class="text-blue-600 font-semibold">{task.location_name}</span>
-          </p>
-        </div>
-      {/if}
-      
-
-        <!-- Points Countdown Bar -->
         <div class="mt-4">
             <p class="text-lg">Points Countdown:</p>
             <div class="progress-bar-container">
-                <div class="progress-bar" style="width: {score/1000*100}%"></div>
+                <div class="progress-bar" style={`width: ${score / 1000 * 100}%`}></div>
             </div>
             <p class="text-lg text-center mt-1">{score} pts</p>
-            <p class="text-lg text-center mt-1">Guess {incorrectGuesses} of 5</p>
+            <p class="text-lg text-center mt-1">Guess {incorrectGuesses} of {MAX_GUESSES}</p>
         </div>
 
-        {#if taskReady}
-            <button on:click={startNextTask} class="mt-4 w-full bg-green-500 text-white py-2 rounded-md hover:bg-green-600">
-                Start New Task
-            </button>
+        {#if task}
+            <div class="mt-4 p-4 bg-white border border-gray-200 rounded-lg shadow">
+                <p class="text-sm text-gray-500">Current quest</p>
+                <p class="text-lg font-semibold text-gray-800">{task.location_name}</p>
+                <p class="text-xs text-gray-500 mt-1">
+                    {#if taskInProgress}
+                        Select on the map, then check your answer.
+                    {:else if gameStarted}
+                        Preparing next round...
+                    {:else}
+                        Press start to begin.
+                    {/if}
+                </p>
+                {#if taskInProgress}
+                    <button on:click={checkTaskCompletion} class="mt-3 w-full bg-blue-500 text-white py-2 rounded-md hover:bg-blue-600">
+                        Check if I'm there!
+                    </button>
+                {/if}
+            </div>
         {/if}
 
-        {#if task && !taskReady}
-            {#if countdown > 0}
-                <p class="text-lg text-center mt-2 font-bold text-red-500">Task starts in {countdown}...</p>
+        {#if checkMessage}
+            <div class={`mt-4 mx-auto max-w-md px-4 py-3 rounded shadow text-center border ${checkStatus === "success" ? "bg-green-50 border-green-400 text-green-800" : "bg-red-50 border-red-400 text-red-700"}`}>
+                <p class="font-semibold">{checkMessage}</p>
+                {#if checkStatus === "success" && lastBonusPoints}
+                    <p class="text-sm mt-1">Bonus: {lastBonusPoints} pts</p>
+                {/if}
+                {#if lastDistanceKm !== null}
+                    <p class="text-sm mt-1">Distance: {lastDistanceKm.toFixed(2)} km</p>
+                {/if}
+            </div>
+        {/if}
+
+        <div class="mt-4 space-y-2">
+            {#if !gameStarted}
+                <button on:click={startGame} class="w-full bg-green-500 text-white py-2 rounded-md hover:bg-green-600">
+                    Start Task
+                </button>
             {:else}
-                <button on:click={checkTaskCompletion} class="mt-4 w-full bg-blue-500 text-white py-2 rounded-md hover:bg-blue-600">
-                    Check if I'm there!
+                <p class="text-sm text-gray-600">{taskInProgress ? "Round in progress" : "Next round loading..."}</p>
+                <button on:click={endSession} class="w-full bg-gray-200 text-gray-800 py-2 rounded-md hover:bg-gray-300">
+                    End Session
                 </button>
             {/if}
-            {#if checkMessage}
-            <div class="mt-4 mx-auto max-w-md px-4 py-3 bg-red-50 border border-red-400 rounded shadow text-red-700 text-center">
-              {checkMessage}
-            </div>
-          {/if}
-        {/if}
+        </div>
     </div>
 
     <!-- Map -->
     <div class="flex-1">
         <h1 class="text-3xl text-center">Find the Landmark</h1>
-        <div id="map" class="w-full h-[85vh] rounded-lg shadow-xl"></div>
+        <div class="mt-2 mb-2 text-center text-sm text-gray-600">
+            {#if taskInProgress}
+                Select a spot on the map, then use the sidebar to submit.
+            {:else if gameStarted}
+                Loading the next task...
+            {:else}
+                Press "Start Task" to begin.
+            {/if}
+        </div>
+        <div id="map" class="w-full h-[80vh] rounded-lg shadow-xl"></div>
     </div>
 
     <!-- Leaderboard -->
